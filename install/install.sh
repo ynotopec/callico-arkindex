@@ -8,6 +8,17 @@ ENV_FILE="${INSTALL_DIR}/production.env"
 ENV_EXAMPLE="${ENV_FILE}.example"
 DEFAULT_DOMAIN="localhost"
 
+is_local_domain() {
+  case "$1" in
+    localhost|127.0.0.1|0.0.0.0)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 urlencode() {
   python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
@@ -80,7 +91,10 @@ TRAEFIK_DASHBOARD_DOMAIN=${traefik_domain}
 TRAEFIK_HTTP_BIND_ADDRESS=0.0.0.0
 TRAEFIK_HTTPS_BIND_ADDRESS=0.0.0.0
 TRAEFIK_CONFIG_FILE=../install/traefik/traefik.toml
-TRAEFIK_CERTS_DIR=../install/traefik
+TRAEFIK_CERTS_DIR=../install/traefik/certs
+TRAEFIK_TLS_CONFIG_FILE=../install/traefik/certs/tls.toml
+TRAEFIK_TLS_CERT_FILE=
+TRAEFIK_TLS_KEY_FILE=
 TRAEFIK_ACME_EMAIL=${acme_email}
 
 INSTANCE_URL=${instance_url}
@@ -93,6 +107,7 @@ DJANGO_SUPERUSER_EMAIL=admin@${root_domain}
 DJANGO_SUPERUSER_PASSWORD=${password}
 DJANGO_SUPERUSER_FIRST_NAME=Admin
 DJANGO_SUPERUSER_LAST_NAME=User
+DJANGO_SUPERUSER_DISPLAY_NAME=Admin User
 
 POSTGRES_USER=callico
 POSTGRES_PASSWORD=${password}
@@ -175,17 +190,99 @@ set +a
 
 export CALLICO_ENV_FILE="${CALLICO_ENV_FILE:-${ENV_FILE}}"
 
-ACME_FILE_RELATIVE="${TRAEFIK_CERTS_DIR:-./traefik/certs}/acme.json"
-if [[ "${ACME_FILE_RELATIVE}" = /* ]]; then
-  ACME_FILE="${ACME_FILE_RELATIVE}"
+CERTS_DIR_RELATIVE="${TRAEFIK_CERTS_DIR:-./traefik/certs}"
+if [[ "${CERTS_DIR_RELATIVE}" = /* ]]; then
+  CERTS_DIR="${CERTS_DIR_RELATIVE}"
 else
-  ACME_FILE="${CALLICO_DIR}/${ACME_FILE_RELATIVE#./}"
+  CERTS_DIR="${CALLICO_DIR}/${CERTS_DIR_RELATIVE#./}"
 fi
-mkdir -p "$(dirname "${ACME_FILE}")"
+mkdir -p "${CERTS_DIR}"
+
+ACME_FILE="${CERTS_DIR}/acme.json"
 if [[ ! -f "${ACME_FILE}" ]]; then
   touch "${ACME_FILE}"
 fi
 chmod 600 "${ACME_FILE}"
+
+TLS_CONFIG_RELATIVE="${TRAEFIK_TLS_CONFIG_FILE:-./traefik/certs/tls.toml}"
+if [[ "${TLS_CONFIG_RELATIVE}" = /* ]]; then
+  TLS_CONFIG_FILE="${TLS_CONFIG_RELATIVE}"
+else
+  TLS_CONFIG_FILE="${CALLICO_DIR}/${TLS_CONFIG_RELATIVE#./}"
+fi
+mkdir -p "$(dirname "${TLS_CONFIG_FILE}")"
+
+write_tls_config() {
+  if [[ -n "${TRAEFIK_TLS_CERT_FILE:-}" || -n "${TRAEFIK_TLS_KEY_FILE:-}" ]]; then
+    if [[ -z "${TRAEFIK_TLS_CERT_FILE:-}" || -z "${TRAEFIK_TLS_KEY_FILE:-}" ]]; then
+      echo "Both TRAEFIK_TLS_CERT_FILE and TRAEFIK_TLS_KEY_FILE must be set to configure a custom certificate." >&2
+      exit 1
+    fi
+
+    local cert_path key_path cert_mount key_mount
+    if [[ "${TRAEFIK_TLS_CERT_FILE}" = /* ]]; then
+      cert_path="${TRAEFIK_TLS_CERT_FILE}"
+      cert_mount="$(basename "${TRAEFIK_TLS_CERT_FILE}")"
+    else
+      cert_path="${CERTS_DIR}/${TRAEFIK_TLS_CERT_FILE}"
+      cert_mount="${TRAEFIK_TLS_CERT_FILE}"
+    fi
+
+    if [[ "${TRAEFIK_TLS_KEY_FILE}" = /* ]]; then
+      key_path="${TRAEFIK_TLS_KEY_FILE}"
+      key_mount="$(basename "${TRAEFIK_TLS_KEY_FILE}")"
+    else
+      key_path="${CERTS_DIR}/${TRAEFIK_TLS_KEY_FILE}"
+      key_mount="${TRAEFIK_TLS_KEY_FILE}"
+    fi
+
+    if [[ ! -f "${cert_path}" ]]; then
+      echo "Unable to find TLS certificate at ${cert_path}." >&2
+      exit 1
+    fi
+
+    if [[ ! -f "${key_path}" ]]; then
+      echo "Unable to find TLS private key at ${key_path}." >&2
+      exit 1
+    fi
+
+    if [[ "${cert_path}" != "${CERTS_DIR}/${cert_mount}" ]]; then
+      cp "${cert_path}" "${CERTS_DIR}/${cert_mount}"
+      cert_path="${CERTS_DIR}/${cert_mount}"
+    fi
+
+    if [[ "${key_path}" != "${CERTS_DIR}/${key_mount}" ]]; then
+      cp "${key_path}" "${CERTS_DIR}/${key_mount}"
+      key_path="${CERTS_DIR}/${key_mount}"
+    fi
+
+    chmod 600 "${CERTS_DIR}/${cert_mount}" "${CERTS_DIR}/${key_mount}"
+
+    cat >"${TLS_CONFIG_FILE}" <<EOF
+[tls]
+  [[tls.certificates]]
+    certFile = "/certs/${cert_mount}"
+    keyFile = "/certs/${key_mount}"
+EOF
+  else
+    cat >"${TLS_CONFIG_FILE}" <<'EOF'
+# No custom TLS certificate configured. Traefik will rely on ACME.
+EOF
+  fi
+}
+
+write_tls_config
+
+if [[ -z "${TRAEFIK_TLS_CERT_FILE:-}" && -z "${TRAEFIK_TLS_KEY_FILE:-}" ]]; then
+  if [[ -z "${TRAEFIK_ACME_EMAIL:-}" ]] && ! is_local_domain "${CALLICO_DOMAIN:-}"; then
+    cat >&2 <<'MSG'
+No custom TLS certificate has been provided and TRAEFIK_ACME_EMAIL is empty.
+Traefik cannot request Let's Encrypt certificates without a contact e-mail. Set
+TRAEFIK_ACME_EMAIL in install/production.env or provide certificate files.
+MSG
+    exit 1
+  fi
+fi
 
 if [[ -z "${DJANGO_SUPERUSER_PASSWORD:-}" ]]; then
   echo "DJANGO_SUPERUSER_PASSWORD must be set in ${ENV_FILE}." >&2
@@ -194,6 +291,27 @@ fi
 
 echo "Starting Callico stack..."
 docker compose "${COMPOSE_ARGS[@]}" up -d
+
+wait_for_postgres() {
+  local retries=${1:-30}
+  local delay=${2:-2}
+  local pg_user="${POSTGRES_USER:-callico}"
+  local pg_db="${POSTGRES_DB:-callico}"
+
+  echo "Waiting for PostgreSQL to be ready..."
+  for ((attempt = 1; attempt <= retries; attempt++)); do
+    if docker compose "${COMPOSE_ARGS[@]}" exec -T postgres pg_isready -U "${pg_user}" -d "${pg_db}" >/dev/null 2>&1; then
+      echo "PostgreSQL is ready."
+      return 0
+    fi
+    sleep "${delay}"
+  done
+
+  echo "PostgreSQL did not become ready in time." >&2
+  return 1
+}
+
+wait_for_postgres
 
 echo "Running database migrations..."
 docker compose "${COMPOSE_ARGS[@]}" run --rm callico django-admin migrate
@@ -208,7 +326,8 @@ if ! docker compose "${COMPOSE_ARGS[@]}" run --rm \
   -e DJANGO_SUPERUSER_PASSWORD \
   -e DJANGO_SUPERUSER_FIRST_NAME \
   -e DJANGO_SUPERUSER_LAST_NAME \
-  callico django-admin createsuperuser --noinput
+  -e DJANGO_SUPERUSER_DISPLAY_NAME \
+  callico django-admin createsuperuser --noinput --display_name "${DJANGO_SUPERUSER_DISPLAY_NAME}"
 then
   echo "Superuser creation skipped (probably already exists)." >&2
 fi
