@@ -27,6 +27,7 @@ services:
       traefik.http.routers.traefik.rule: "Host(`${TRAEFIK_DASHBOARD_DOMAIN:-traefik.localhost}`)"
       traefik.http.routers.traefik.service: api@internal
       traefik.http.routers.traefik.tls: true
+      traefik.http.routers.traefik.tls.certresolver: le
 
   # Callico web application
   callico:
@@ -50,6 +51,7 @@ services:
       traefik.enable: true
       traefik.http.routers.callico.rule: "Host(`${CALLICO_DOMAIN:-callico.dev.localhost}`)"
       traefik.http.routers.callico.tls: true
+      traefik.http.routers.callico.tls.certresolver: le
 
   postgres:
     container_name: callico-database
@@ -102,6 +104,7 @@ services:
       traefik.enable: true
       traefik.http.routers.tasks.rule: "Host(`${FLOWER_DOMAIN:-flower.dev.localhost}`)"
       traefik.http.routers.tasks.tls: true
+      traefik.http.routers.tasks.tls.certresolver: le
 
   # Minio, for media files storage
   minio:
@@ -122,10 +125,12 @@ services:
       traefik.enable: true
       traefik.http.routers.minio.rule: "Host(`${MINIO_DOMAIN:-minio.dev.localhost}`)"
       traefik.http.routers.minio.tls: true
+      traefik.http.routers.minio.tls.certresolver: le
       traefik.http.routers.minio.service:  minio-service
       traefik.http.services.minio-service.loadbalancer.server.port: 9000
       traefik.http.routers.minio-console.rule: "Host(`${MINIO_CONSOLE_DOMAIN:-minio-console.dev.localhost}`)"
       traefik.http.routers.minio-console.tls: true
+      traefik.http.routers.minio-console.tls.certresolver: le
       traefik.http.routers.minio-console.service:  minio-console-service
       traefik.http.services.minio-console-service.loadbalancer.server.port: 9001
     depends_on:
