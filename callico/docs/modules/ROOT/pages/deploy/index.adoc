@@ -1,0 +1,82 @@
+[#self-hosting-callico]
+= Self-Hosting Callico
+
+It is possible to run the Callico platform on your own servers, using the following instructions.
+
+[#requirements]
+== Requirements
+
+To deploy your own Callico instance, you need:
+
+* An online server using a GNU/Linux distribution as operating system, we recommend using either https://ubuntu.com[Ubuntu] or https://debian.org[Debian].
+* This online server must have https://docs.docker.com/desktop/install/linux-install/[Docker] installed.
+* And must be reachable with a public domain name.
+
+[NOTE]
+====
+In this document, we will assume your server is available at `callico.company.com`.
+====
+
+[#file-storage]
+=== File storage
+
+The Callico platform requires an Amazon S3-compatible bucket to store media files (thumbnails, file exports, etc). You can either:
+
+. use a cloud provider to create a bucket: you will not need to self-host this service but your data will reside on that cloud,
+. or self-host this service using https://min.io/[Min.IO] on your own server. If you choose this option, you will need 2 additional public domain names to expose the file API and the administration panel.
+
+[NOTE]
+====
+We will use `minio.callico.company.com` (file API) and `minio-console.callico.company.com` (administration panel) as domain name examples in this document.
+====
+
+[#architecture]
+== Architecture
+
+[mermaid]
+....
+graph TD
+	traefik[Traefik] --> backend[Backend]
+	backend --> postgres[PostgreSQL]
+	backend --> redis[Redis]
+	worker[Worker] --> postgres
+	worker --> redis
+	backend --> minio[Min.IO]
+	worker --> minio
+....
+
+We use exclusively open-source software for the whole architecture powering Callico:
+
+* https://traefik.io/traefik/[Traefik] is a load-balancer, capable of managing SSL certificates using https://letsencrypt.org/[Let's encrypt],
+* https://www.postgresql.org/[PostgreSQL] is the leading relational database: it stores all of Callico data,
+* https://redis.io/[Redis] is a fast data store which we use to communicate with asynchronous workers,
+* https://min.io/[Min.IO] is a file storage server, similar to Amazon S3 service.
+
+Finally, the same Docker image will be used to run our *Backend* (handling every user interaction), and our *Worker* (used for xref:projects/processes/index.adoc[long-running tasks] like data import & export).
+
+[#deployment-with-docker-compose]
+== Deployment with docker-compose
+
+The repository now ships with an automation layer so you can provision a production-ready stack with a single command. The main artefacts you will use are:
+
+* https://gitlab.teklia.com/callico/callico/-/blob/master/docker-compose.yml[`docker-compose.yml`]: base definition of all Callico services. It now reacts to environment variables so the same file works for local development and public deployments.
+* https://gitlab.teklia.com/callico/callico/-/blob/master/install/production.env.example[`install/production.env.example`]: template for all the secrets, domain names and service credentials (including Traefik settings pointing to the automated configuration),
+ ** a full description of xref:./settings.adoc[these settings is available].
+* https://gitlab.teklia.com/callico/callico/-/blob/master/install/install.sh[`install/install.sh`]: orchestrates the installation (containers, database migrations, static files and superuser creation),
+* https://gitlab.teklia.com/callico/callico/-/blob/master/install/uninstall.sh[`install/uninstall.sh`]: removes the whole stack, including data volumes.
+
+To deploy your own Callico instance:
+
+. Copy the `install` directory and the root `docker-compose.yml` on your server.
+. Duplicate `install/production.env.example` to `install/production.env` and update it with your domain names, secure passwords and Min.IO/S3 configuration.
+. Run the automated installer: `./install/install.sh`
+** The script verifies Docker availability, prepares a Let's Encrypt storage (`install/traefik/acme.json`), starts every container and runs the Django database migrations automatically.
+ ** `DJANGO_SUPERUSER_*` variables from your environment file are used to create the first administrator account. If it already exists, the step is skipped gracefully.
+. Once the script completes, open the `INSTANCE_URL` declared in your environment file. Traefik fetches TLS certificates from Let's Encrypt and exposes the application on ports 80/443 for any internet user.
+. (Optional) Access Min.IO and Flower from their dedicated domains when you need to manage storage or background tasks. Remember to create the `STORAGE_BUCKET_NAME` bucket on Min.IO (default: `callico`) before importing data.
+. Whenever you need to tear everything down, run `./install/uninstall.sh` – this removes all containers, networks and volumes created for Callico while keeping your configuration files on disk.
+
+[#going-further]
+== Going further
+
+We can provide technical support if you need help to go further with Callico on your servers (using a cluster of servers, adding monitoring and backups, deploying with orchestration tools, etc). You can reach us through our https://teklia.com/contact[contact form] to start a discussion.

@@ -1,0 +1,38 @@
+defaultEntryPoints = ["websecure"]
+logLevel = "INFO"
+
+[providers]
+  [providers.docker]
+    endpoint = "unix:///var/run/docker.sock"
+    watch = true
+    exposedByDefault = false
+
+  [providers.file]
+    filename = "/certs/tls.toml"
+    watch = true
+
+[accessLog]
+
+[api]
+  dashboard = true
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":80"
+
+    [entryPoints.web.http.redirections.entryPoint]
+      to = "websecure"
+      scheme = "https"
+
+  [entryPoints.websecure]
+    address = ":443"
+
+[certificatesResolvers]
+  [certificatesResolvers.le.acme]
+    storage = "/certs/acme.json"
+
+    [certificatesResolvers.le.acme.httpChallenge]
+      entryPoint = "web"
+
+[entryPoints.websecure.http.tls]
+  certResolver = "le"
