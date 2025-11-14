@@ -1,2 +1,0 @@
-# This file is managed by install/install.sh.
-# It remains intentionally empty by default so Traefik falls back to ACME-issued certificates.

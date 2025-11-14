@@ -7,10 +7,6 @@ logLevel = "INFO"
     watch = true
     exposedByDefault = false
 
-  [providers.file]
-    filename = "/certs/tls.toml"
-    watch = true
-
 [accessLog]
 
 [api]
